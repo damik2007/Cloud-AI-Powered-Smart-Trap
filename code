@@ -1,0 +1,260 @@
+/*
+  Automated ESP32-CAM Pest Detector with Synchronized OLED Display & Serial Output
+  Final version for demonstration.
+*/
+
+// =================================================================
+//                      REQUIRED LIBRARIES
+// =================================================================
+#include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include "esp_camera.h"
+#include <ArduinoJson.h>
+#include "base64.h"
+#include <Adafruit_GFX.h>
+#include <Wire.h>
+#include <Adafruit_SSD1306.h>
+
+// =================================================================
+//                          CONFIGURATION
+// =================================================================
+const char* ssid = "XXXXX";
+const char* password = "XXXXX";
+const String GOOGLE_API_KEY = "XXXXXX";
+const String NTFY_TOPIC = "XXXXXXX";
+// =================================================================
+
+// OLED Display Settings
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_SCL 14
+#define OLED_SDA 15
+#define OLED_RESET -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// The advanced pest detection prompt
+const char* pest_prompt = "You are a specialized AI for identifying pests on agricultural sticky traps. Follow these rules precisely: 1. A 'pest' is defined as a real insect OR a clear drawing of an insect. 2. Look for features like a body, legs, and antennae. 3. IGNORE all shadows, smudges, reflections, or marks that are not clearly an insect. 4. If you are certain a pest is present, respond with the single word: PEST. 5. If the trap is clear or you are uncertain, respond with the single word: NO PEST.";
+
+// CAMERA_MODEL_AI_THINKER Pin Definition
+#define PWDN_GPIO_NUM 32
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM 0
+#define SIOD_GPIO_NUM 26
+#define SIOC_GPIO_NUM 27
+#define Y9_GPIO_NUM 35
+#define Y8_GPIO_NUM 34
+#define Y7_GPIO_NUM 39
+#define Y6_GPIO_NUM 36
+#define Y5_GPIO_NUM 21
+#define Y4_GPIO_NUM 19
+#define Y3_GPIO_NUM 18
+#define Y2_GPIO_NUM 5
+#define VSYNC_GPIO_NUM 25
+#define HREF_GPIO_NUM 23
+#define PCLK_GPIO_NUM 22
+
+// Timer for taking photos
+const int timerInterval = 30000; // 30 seconds
+unsigned long previousMillis = 0;
+
+// NEW: Helper function to print messages to both Serial and OLED
+void printAndDisplay(const String& message) {
+  // Print to Serial Monitor
+  Serial.println(message);
+  
+  // Display on OLED
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(message, 0, 0, &x1, &y1, &w, &h);
+  display.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT - h) / 2);
+  display.println(message);
+  display.display();
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // Initialize OLED Display
+  Wire.begin(OLED_SDA, OLED_SCL);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("SSD1306 allocation failed");
+    for (;;);
+  }
+  
+  WiFi.begin(ssid, password);
+  printAndDisplay("Connecting to WiFi...");
+  
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print("."); // Keep the dots for visual feedback on serial
+  }
+  
+  Serial.println("\nWiFi Connected!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+  printAndDisplay("WiFi Connected!");
+  delay(2000);
+
+  camera_config_t config;
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sscb_sda = SIOD_GPIO_NUM;
+  config.pin_sscb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_CIF;
+  config.jpeg_quality = 12;
+  config.fb_count = 1;
+
+  if (esp_camera_init(&config) != ESP_OK) {
+    printAndDisplay("Camera Init Failed");
+    return;
+  }
+  printAndDisplay("Camera Initialized");
+  delay(2000);
+  printAndDisplay("Starting Loop...");
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= timerInterval) {
+    previousMillis = currentMillis;
+    String result = captureAndAnalyzeImage();
+    
+    String finalMessage = "Analysis Result: " + result;
+    printAndDisplay(finalMessage);
+
+    if (result == "PEST") {
+      delay(1000); // Pause to show result
+      printAndDisplay("Sending Notification...");
+      sendNtfyNotification();
+    }
+    
+    delay(5000); // Hold final status on screen
+    printAndDisplay("Monitoring...");
+  }
+}
+
+String captureAndAnalyzeImage() {
+  printAndDisplay("\nCapturing image...");
+  camera_fb_t* fb = esp_camera_fb_get();
+  if (!fb) {
+    printAndDisplay("Capture Error");
+    return "Capture Error";
+  }
+
+  String base64Image = base64::encode((uint8_t*)fb->buf, fb->len);
+  esp_camera_fb_return(fb);
+
+  if (base64Image.isEmpty()) {
+    printAndDisplay("Encode Error");
+    return "Encode Error";
+  }
+  
+  return analyzeImage(base64Image);
+}
+
+String analyzeImage(const String& base64Image) {
+  printAndDisplay("Analyzing Image...");
+  String result;
+
+  DynamicJsonDocument doc(20480);
+  JsonArray contents = doc.createNestedArray("contents");
+  JsonObject content = contents.createNestedObject();
+  JsonArray parts = content.createNestedArray("parts");
+  
+  JsonObject textPart = parts.createNestedObject();
+  textPart["text"] = pest_prompt;
+
+  JsonObject imagePart = parts.createNestedObject();
+  JsonObject inlineData = imagePart.createNestedObject("inlineData");
+  inlineData["mimeType"] = "image/jpeg";
+  inlineData["data"] = base64Image;
+
+  String jsonPayload;
+  serializeJson(doc, jsonPayload);
+
+  if (sendPostRequestToGemini(jsonPayload, result)) {
+    DynamicJsonDocument responseDoc(2048);
+    deserializeJson(responseDoc, result);
+    
+    if (responseDoc.containsKey("candidates")) {
+        String responseContent = responseDoc["candidates"][0]["content"]["parts"][0]["text"].as<String>();
+        responseContent.trim();
+        return responseContent;
+    } else {
+        Serial.println("--- ERROR RESPONSE ---");
+        Serial.println(result);
+        return "JSON Parse Error";
+    }
+  } else {
+    Serial.print("[Gemini] Error: ");
+    Serial.println(result);
+    return "HTTP Error";
+  }
+}
+
+bool sendPostRequestToGemini(const String& payload, String& result) {
+  HTTPClient http;
+  String apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=" + GOOGLE_API_KEY;
+  http.begin(apiUrl);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(30000);
+
+  int httpResponseCode = http.POST(payload);
+
+  if (httpResponseCode > 0) {
+    result = http.getString();
+    http.end();
+    return true;
+  } else {
+    result = "HTTP request failed, response code: " + String(httpResponseCode) + " " + http.errorToString(httpResponseCode);
+    http.end();
+    return false;
+  }
+}
+
+void sendNtfyNotification() {
+  const char* messages[] = {
+    "Heads up! We've got an uninvited guest on the trap.",
+    "Alert: Pest protocol initiated. Intruder detected.",
+    "Warning: Unwanted visitor spotted. Check the premises.",
+    "Detection Alert! The smart trap has found a pest."
+  };
+  String message = messages[random(0, 4)];
+
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String ntfy_url = "http://ntfy.sh/" + NTFY_TOPIC;
+    http.begin(ntfy_url);
+    http.addHeader("Content-Type", "text/plain");
+    
+    int httpResponseCode = http.POST(message);
+    if (httpResponseCode > 0) {
+      Serial.printf("ntfy notification sent, response code: %d\n", httpResponseCode);
+    } else {
+      Serial.printf("Error sending ntfy notification: %s\n", http.errorToString(httpResponseCode).c_str());
+    }
+    http.end();
+  } else {
+    Serial.println("WiFi not connected, cannot send notification.");
+  }
+}
