@@ -22,7 +22,7 @@ This project involved significant troubleshooting and iterative development:
 * **Memory Management:** Overcame `HTTP Error: -?` crashes caused by insufficient RAM during HTTPS requests by optimizing the camera image size to `FRAMESIZE_CIF` and efficiently handling JSON payloads using `ArduinoJson`.
 * **Connectivity:** Debugged and resolved Wi-Fi connection failures with mobile hotspots by identifying the root cause (WPA3 incompatibility) and configuring the hotspot to use `WPA2-Personal` security. Optimized `setup()` sequence to connect WiFi before initializing peripherals.
 * **AI Accuracy:** Refined the prompt sent to the Gemini API multiple times to improve accuracy, specifically instructing it to handle drawings and ignore visual noise, achieving reliable detection in test scenarios.
-* **Hardware Debugging:** Diagnosed and resolved power delivery issues during the initial hardware prototyping phase (soldering).
+
 
 ## Outcome
 A fully functional, reliable, and portable prototype of an AI-powered smart trap. The system successfully leverages cloud AI to overcome local hardware limitations, providing accurate pest detection and instant notifications. The integration of an OLED display provides clear status updates. This demonstrates a practical application of IoT and Cloud AI for agricultural monitoring.
